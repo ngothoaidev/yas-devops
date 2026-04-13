@@ -1,0 +1,74 @@
+pipeline {
+    agent any
+
+    environment {
+        DOCKER_HUB_USER = "nhgthoai0418"
+        DOCKER_CREDENTIALS_ID = "dockerhub-creds" 
+    }
+
+    stages {
+        stage('Checkout Code') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Determine Changed Services') {
+            steps {
+                script {
+                    // Lấy mã commit cuối
+                    env.COMMIT_ID = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    echo "Current Commit ID: ${env.COMMIT_ID}"
+
+                    // Lấy danh sách các thư mục cấp 1 có sự thay đổi trong commit vừa rồi
+                    def changedFiles = sh(script: 'git diff-tree --no-commit-id --name-only -r HEAD', returnStdout: true).trim().split('\n')
+                    def changedServices = []
+                    
+                    for (file in changedFiles) {
+                        def topLevelDir = file.split('/')[0]
+                        // Chỉ lấy những thư mục có chứa Dockerfile (tức là các service cần build)
+                        if (fileExists("${topLevelDir}/Dockerfile") && !changedServices.contains(topLevelDir)) {
+                            changedServices.add(topLevelDir)
+                        }
+                    }
+                    
+                    if (changedServices.isEmpty()) {
+                        echo "Không phát hiện thay đổi ở các thư mục chứa Dockerfile. Bỏ qua build."
+                        env.SKIP_BUILD = "true"
+                    } else {
+                        env.CHANGED_SERVICES = changedServices.join(',')
+                        echo "Các service cần build lại: ${env.CHANGED_SERVICES}"
+                        env.SKIP_BUILD = "false"
+                    }
+                }
+            }
+        }
+
+        stage('Build and Push Images') {
+            when {
+                environment name: 'SKIP_BUILD', value: 'false'
+            }
+            steps {
+                script {
+                    def services = env.CHANGED_SERVICES.split(',')
+                    
+                    withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
+                        sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
+                        
+                        for (service in services) {
+                            def dockerRepo = "${DOCKER_HUB_USER}/yas-${service}"
+                            echo "Đang xử lý thư mục: ${service}..."
+                            
+                            // Build image với context là thư mục của service đó
+                            sh """
+                            docker build -t ${dockerRepo}:${env.COMMIT_ID} -f ${service}/Dockerfile ./${service}
+                            docker push ${dockerRepo}:${env.COMMIT_ID}
+                            docker rmi ${dockerRepo}:${env.COMMIT_ID} || true
+                            """
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

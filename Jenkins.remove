@@ -1,0 +1,42 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'SERVICE_NAME', defaultValue: 'tax-service', description: 'Tên microservice cần khôi phục về trạng thái gốc')
+    }
+
+    environment {
+        // Tên repository trên Docker Hub của bạn
+        DOCKER_REPO = "nhgthoai0418/yas-${params.SERVICE_NAME}"
+        KUBECONFIG_CRED_ID = "k8s-kubeconfig" 
+    }
+
+    stages {
+        stage('Remove Test Deployment (Rollback)') {
+            steps {
+                withKubeConfig([credentialsId: env.KUBECONFIG_CRED_ID]) {
+                    script {
+                        echo "Đang dọn dẹp bản test của ${params.SERVICE_NAME}..."
+                        echo "Khôi phục service về lại phiên bản tag: main"
+                        
+                        // Set image về lại tag 'main' (hoặc 'latest' tùy thiết lập của nhóm)
+                        sh """
+                        kubectl set image deployment/${params.SERVICE_NAME} \
+                        ${params.SERVICE_NAME}=${DOCKER_REPO}:main
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Verify Rollback') {
+            steps {
+                withKubeConfig([credentialsId: env.KUBECONFIG_CRED_ID]) {
+                    // Chờ cụm K8s khởi động lại pod gốc ổn định
+                    sh "kubectl rollout status deployment/${params.SERVICE_NAME}"
+                    echo "✅ DỌN DẸP THÀNH CÔNG! Trả lại tài nguyên cho cụm K8s."
+                }
+            }
+        }
+    }
+}
