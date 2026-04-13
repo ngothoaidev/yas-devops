@@ -1,0 +1,55 @@
+pipeline {
+    agent any
+
+    parameters {
+        string(name: 'SERVICE_NAME', defaultValue: 'tax', description: 'Tên microservice cần deploy (ví dụ: tax, cart, order)')
+        string(name: 'IMAGE_TAG', defaultValue: 'main', description: 'Tag của image (mã commit ID hoặc main/latest)')
+        // Thêm tham số môi trường để chuẩn bị cho phần nâng cao
+        choice(name: 'ENVIRONMENT', choices: ['dev', 'staging'], description: 'Môi trường triển khai')
+    }
+
+    environment {
+        // Tên repository trên Docker Hub
+        DOCKER_REPO = "nhgthoai0418/yas-${params.SERVICE_NAME}"
+        KUBECONFIG_CRED_ID = "k8s-kubeconfig" 
+    }
+
+    stages {
+        stage('Deploy via Helm') {
+            steps {
+                withKubeConfig([credentialsId: env.KUBECONFIG_CRED_ID]) {
+                    script {
+                        echo "🚀 Đang deploy ${params.SERVICE_NAME} lên môi trường ${params.ENVIRONMENT}..."
+                        echo "📦 Phiên bản Image Tag: ${params.IMAGE_TAG}"
+                        
+                        // Sử dụng Helm để upgrade hoặc install mới nếu chưa có
+                        // Trỏ trực tiếp vào thư mục chart tương ứng của service
+                        sh """
+                        helm upgrade --install ${params.SERVICE_NAME} ./k8s/charts/${params.SERVICE_NAME} \
+                            --namespace ${params.ENVIRONMENT} \
+                            --create-namespace \
+                            --set image.repository=${DOCKER_REPO} \
+                            --set image.tag=${params.IMAGE_TAG} \
+                            --wait --timeout 3m
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Export Access Info') {
+            steps {
+                withKubeConfig([credentialsId: env.KUBECONFIG_CRED_ID]) {
+                    script {
+                        echo "========================================================"
+                        echo "✅ DEPLOY THÀNH CÔNG VÀO NAMESPACE: ${params.ENVIRONMENT}!"
+                        echo "Thông tin Service ${params.SERVICE_NAME}:"
+                        // Lấy thông tin port của service trong đúng namespace
+                        sh "kubectl get svc ${params.SERVICE_NAME} -n ${params.ENVIRONMENT}"
+                        echo "========================================================"
+                    }
+                }
+            }
+        }
+    }
+}
