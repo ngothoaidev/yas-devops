@@ -75,7 +75,7 @@ pipeline {
                         // Chạy Maven Wrapper để build file .jar
                         // -DskipTests giúp bỏ qua việc chạy unit test để tăng tốc độ build
                         sh """
-                        chmod +x ./mvnw
+                        chmod +x mvnw
                         ./mvnw clean install -pl ${service} -am -DskipTests
                         """
                     }
