@@ -2,70 +2,139 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_HUB_USER = "nhgthoai0418"
-        DOCKER_CREDENTIALS_ID = "dockerhub-creds" 
+        DOCKERHUB_USR = "nhgthoai0418"
+        DOCKERHUB_CREDS = "dockerhub-credentials"
     }
 
     stages {
-        stage('Checkout Code') {
+
+        stage('Checkout') {
             steps {
                 checkout scm
             }
         }
-
-        stage('Determine Changed Services') {
+        
+        stage('Prepare') {
             steps {
                 script {
-                    // Lấy mã commit cuối
-                    env.COMMIT_ID = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-                    echo "Current Commit ID: ${env.COMMIT_ID}"
+                    def commitId = env.GIT_COMMIT?.take(8)
+    
+                    if (!commitId) {
+                        echo "GIT_COMMIT null, fallback to git rev-parse"
+                        commitId = sh(
+                            script: "git rev-parse --short HEAD",
+                            returnStdout: true
+                        ).trim()
+                    }
+    
+                    env.COMMIT_ID = commitId
+                    echo "COMMIT_ID: ${env.COMMIT_ID}"
+                }
+            }
+        }
 
-                    // Lấy danh sách các thư mục cấp 1 có sự thay đổi trong commit vừa rồi
-                    def changedFiles = sh(script: 'git diff-tree --no-commit-id --name-only -r HEAD', returnStdout: true).trim().split('\n')
-                    def changedServices = []
-                    
+        stage('Detect Changed Services') {
+            steps {
+                script {
+                    // Lấy danh sách file thay đổi
+                    def changedFiles = sh(
+                        script: "git diff --name-only HEAD~1 HEAD",
+                        returnStdout: true
+                    ).trim().split("\n")
+
+                    def services = []
+
                     for (file in changedFiles) {
-                        def topLevelDir = file.split('/')[0]
-                        // Chỉ lấy những thư mục có chứa Dockerfile (tức là các service cần build)
-                        if (fileExists("${topLevelDir}/Dockerfile") && !changedServices.contains(topLevelDir)) {
-                            changedServices.add(topLevelDir)
+                        def parts = file.tokenize("/")
+                        if (parts.size() > 1) {
+                            def svc = parts[0]
+                            if (!services.contains(svc) && fileExists("${svc}/Dockerfile")) {
+                                services.add(svc)
+                            }
                         }
                     }
-                    
-                    if (changedServices.isEmpty()) {
-                        echo "Không phát hiện thay đổi ở các thư mục chứa Dockerfile. Bỏ qua build."
-                        env.SKIP_BUILD = "true"
-                    } else {
-                        env.CHANGED_SERVICES = changedServices.join(',')
-                        echo "Các service cần build lại: ${env.CHANGED_SERVICES}"
-                        env.SKIP_BUILD = "false"
+
+                    if (services.isEmpty()) {
+                        echo "No service changed → skip build"
+                        currentBuild.result = 'SUCCESS'
+                        return
+                    }
+
+                    env.CHANGED_SERVICES = services.join(",")
+                    echo "Changed services: ${env.CHANGED_SERVICES}"
+                }
+            }
+        }
+        
+        stage('Build JAR') {
+            steps {
+                script {
+                    def services = env.CHANGED_SERVICES.split(',')
+                    for (service in services) {
+                        echo "Compile ${service}..."
+                        // Chạy Maven Wrapper để build file .jar
+                        // -DskipTests giúp bỏ qua việc chạy unit test để tăng tốc độ build
+                        sh """
+                        mvn clean package -pl ${service} -am -DskipTests
+                        """
                     }
                 }
             }
         }
 
-        stage('Build and Push Images') {
+        stage('Docker Login') {
             when {
-                environment name: 'SKIP_BUILD', value: 'false'
+                expression { return env.CHANGED_SERVICES != null }
+            }
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: DOCKERHUB_CREDS,
+                    usernameVariable: 'USER',
+                    passwordVariable: 'PASS'
+                )]) {
+                    sh '''
+                    echo "$PASS" | docker login -u "$USER" --password-stdin
+                    '''
+                }
+            }
+        }
+
+        stage('Build & Push Changed Services') {
+            when {
+                expression { return env.CHANGED_SERVICES != null }
             }
             steps {
                 script {
-                    def services = env.CHANGED_SERVICES.split(',')
-                    
-                    withCredentials([usernamePassword(credentialsId: env.DOCKER_CREDENTIALS_ID, passwordVariable: 'DOCKER_PASS', usernameVariable: 'DOCKER_USER')]) {
-                        sh 'echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin'
-                        
-                        for (service in services) {
-                            def dockerRepo = "${DOCKER_HUB_USER}/yas-${service}"
-                            echo "Đang xử lý thư mục: ${service}..."
-                            
-                            // Build image với context là thư mục của service đó
-                            sh """
-                            docker build -t ${dockerRepo}:${env.COMMIT_ID} -f ${service}/Dockerfile ./${service}
-                            docker push ${dockerRepo}:${env.COMMIT_ID}
-                            docker rmi ${dockerRepo}:${env.COMMIT_ID} || true
-                            """
-                        }
+                    def services = env.CHANGED_SERVICES.split(",")
+
+                    for (svc in services) {
+                        def image = "${DOCKERHUB_USR}/${svc}"
+
+                        echo "Building ${svc}..."
+
+                        sh """
+                        docker build \
+                            --no-cache \
+                            -t ${image}:${COMMIT_ID} \
+                            -f ${svc}/Dockerfile ./${svc}
+                        docker tag ${image}:${COMMIT_ID} ${image}:latest
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            script {
+                if (env.CHANGED_SERVICES) {
+                    def services = env.CHANGED_SERVICES.split(",")
+
+                    for (svc in services) {
+                        def image = "${DOCKERHUB_USR}/${svc}"
+                        sh "docker rmi ${image}:${COMMIT_ID} || true"
+                        sh "docker rmi ${image}:latest || true"
                     }
                 }
             }
