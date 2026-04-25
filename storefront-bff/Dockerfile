@@ -4,3 +4,6 @@ COPY wait-for-it.sh wait-for-it.sh
 RUN chmod +x wait-for-it.sh
 COPY target/storefront*.jar app.jar
 ENTRYPOINT ["java","-jar","/app.jar"]
+
+
+# Test 4
