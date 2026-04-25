@@ -155,7 +155,7 @@ class PaypalServiceTest {
                 "test-token-1", paymentSettings
         );
         PaypalCapturePaymentResponse result = paypalService.capturePayment(paypalCapturePaymentRequest);
-        assertEquals("Something Wrong!", result.failureMessage());
+        assertEquals("Something is Wrong!", result.failureMessage());
     }
 
     @Test
