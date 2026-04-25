@@ -75,10 +75,7 @@ pipeline {
                         // Chạy Maven Wrapper để build file .jar
                         // -DskipTests giúp bỏ qua việc chạy unit test để tăng tốc độ build
                         sh """
-                        mvn clean package -pl ${service} -am -DskipTests
-                        FAT_JAR=\$(find ${service}/target -name "*.jar" ! -name "*plain*" -type f | head -1)
-                        echo "Found JAR: \$FAT_JAR"
-                        cp \$FAT_JAR ${service}/target/app.jar
+                        mvn clean install -pl ${service} -am -DskipTests
                         """
                     }
                 }

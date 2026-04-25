@@ -1,3 +1,3 @@
 FROM eclipse-temurin:21-jre-alpine
-COPY target/app.jar app.jar
+COPY target/sampledata*.jar app.jar
 ENTRYPOINT ["java", "-jar", "/app.jar"]
